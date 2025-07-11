@@ -19,6 +19,7 @@
 #include "Navigation/PathFollowingComponent.h"
 #include "VRPlayerController.h"
 #include "GameFramework/PhysicsVolume.h"
+#include "Animation/AnimInstance.h"
 
 
 DEFINE_LOG_CATEGORY(LogVRBaseCharacterMovement);
@@ -488,14 +489,32 @@ void UVRBaseCharacterMovementComponent::EndPushBackNotification()
 
 FVector UVRBaseCharacterMovementComponent::GetActorFeetLocationVR() const
 {
-	if (AVRBaseCharacter * BaseCharacter = Cast<AVRBaseCharacter>(GetCharacterOwner()))
+
+	const UCapsuleComponent* const CapsuleComponent = CharacterOwner ? CharacterOwner->GetCapsuleComponent() : Cast<UCapsuleComponent>(UpdatedComponent);
+	if (CapsuleComponent)
+	{
+		const float HalfHeight = CapsuleComponent->GetScaledCapsuleHalfHeight();
+		if (AVRBaseCharacter* BaseCharacter = Cast<AVRBaseCharacter>(GetCharacterOwner()))
+		{
+			return BaseCharacter->OffsetComponentToWorld.GetLocation() + HalfHeight * GetGravityDirection();
+		}
+		else
+		{
+			return UpdatedComponent->GetComponentLocation() + HalfHeight * GetGravityDirection();
+		}
+	}
+
+	return Super::GetActorFeetLocation();
+
+
+	/*if (AVRBaseCharacter* BaseCharacter = Cast<AVRBaseCharacter>(GetCharacterOwner()))
 	{
 		return UpdatedComponent ? (BaseCharacter->OffsetComponentToWorld.GetLocation() - FVector(0, 0, UpdatedComponent->Bounds.BoxExtent.Z)) : FNavigationSystem::InvalidLocation;
 	}
 	else
 	{
 		return UpdatedComponent ? (UpdatedComponent->GetComponentLocation() - FVector(0, 0, UpdatedComponent->Bounds.BoxExtent.Z)) : FNavigationSystem::InvalidLocation;
-	}
+	}*/
 }
 
 void UVRBaseCharacterMovementComponent::OnMoveCompleted(FAIRequestID RequestID, const FPathFollowingResult& Result)
@@ -532,7 +551,8 @@ bool UVRBaseCharacterMovementComponent::FloorSweepTest(
 		const FCollisionShape BoxShape = FCollisionShape::MakeBox(FVector(CapsuleRadius * 0.707f, CapsuleRadius * 0.707f, CapsuleHeight));
 
 		// First test with the box rotated so the corners are along the major axes (ie rotated 45 degrees).
-		bBlockingHit = GetWorld()->SweepSingleByChannel(OutHit, Start, End, FQuat(RotateGravityToWorld(FVector(0.f, 0.f, -1.f)), UE_PI * 0.25f), TraceChannel, BoxShape, Params, ResponseParam);
+		//bBlockingHit = GetWorld()->SweepSingleByChannel(OutHit, Start, End, FQuat(RotateGravityToWorld(FVector(0.f, 0.f, -1.f)), UE_PI * 0.25f), TraceChannel, BoxShape, Params, ResponseParam);
+		bBlockingHit = GetWorld()->SweepSingleByChannel(OutHit, Start, End, FQuat(GetGravityDirection(), UE_PI * 0.25f), TraceChannel, BoxShape, Params, ResponseParam);
 
 		if (!bBlockingHit)
 		{
@@ -557,8 +577,8 @@ void UVRBaseCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleL
 	if (DownwardSweepResult != NULL && DownwardSweepResult->IsValidBlockingHit())
 	{
 		// Only if the supplied sweep was vertical and downward.
-		const bool bIsDownward = RotateWorldToGravity(DownwardSweepResult->TraceStart - DownwardSweepResult->TraceEnd).Z > 0;
-		const bool bIsVertical = RotateWorldToGravity(DownwardSweepResult->TraceStart - DownwardSweepResult->TraceEnd).SizeSquared2D() <= UE_KINDA_SMALL_NUMBER;
+		const bool bIsDownward = GetGravitySpaceZ(DownwardSweepResult->TraceStart - DownwardSweepResult->TraceEnd) > 0;
+		const bool bIsVertical = ProjectToGravityFloor(DownwardSweepResult->TraceStart - DownwardSweepResult->TraceEnd).SizeSquared() <= UE_KINDA_SMALL_NUMBER;
 		if (bIsDownward && bIsVertical)
 		{
 			// Reject hits that are barely on the cusp of the radius of the capsule
@@ -568,7 +588,7 @@ void UVRBaseCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleL
 				bSkipSweep = true;
 
 				const bool bIsWalkable = IsWalkable(*DownwardSweepResult);
-				const float FloorDist = RotateWorldToGravity(CapsuleLocation - DownwardSweepResult->Location).Z;
+				const float FloorDist = GetGravitySpaceZ(CapsuleLocation - DownwardSweepResult->Location);
 				OutFloorResult.SetFromSweep(*DownwardSweepResult, FloorDist, bIsWalkable);
 
 				if (bIsWalkable)
@@ -609,7 +629,7 @@ void UVRBaseCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleL
 		FCollisionShape CapsuleShape = FCollisionShape::MakeCapsule(SweepRadius, PawnHalfHeight - ShrinkHeight);
 
 		FHitResult Hit(1.f);
-		bBlockingHit = FloorSweepTest(Hit, CapsuleLocation, CapsuleLocation + RotateGravityToWorld(FVector(0.f, 0.f, -TraceDist)), CollisionChannel, CapsuleShape, QueryParams, ResponseParam);
+		bBlockingHit = FloorSweepTest(Hit, CapsuleLocation, CapsuleLocation + TraceDist * GetGravityDirection(), CollisionChannel, CapsuleShape, QueryParams, ResponseParam);
 
 		if (bBlockingHit)
 		{
@@ -627,7 +647,7 @@ void UVRBaseCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleL
 					CapsuleShape.Capsule.HalfHeight = FMath::Max(PawnHalfHeight - ShrinkHeight, CapsuleShape.Capsule.Radius);
 					Hit.Reset(1.f, false);
 
-					bBlockingHit = FloorSweepTest(Hit, CapsuleLocation, CapsuleLocation + RotateGravityToWorld(FVector(0.f, 0.f, -TraceDist)), CollisionChannel, CapsuleShape, QueryParams, ResponseParam);
+					bBlockingHit = FloorSweepTest(Hit, CapsuleLocation, CapsuleLocation + TraceDist * GetGravityDirection(), CollisionChannel, CapsuleShape, QueryParams, ResponseParam);
 				}
 			}
 
@@ -663,7 +683,7 @@ void UVRBaseCharacterMovementComponent::ComputeFloorDist(const FVector& CapsuleL
 		const float ShrinkHeight = PawnHalfHeight;
 		const FVector LineTraceStart = CapsuleLocation;
 		const float TraceDist = LineDistance + ShrinkHeight;
-		const FVector Down = RotateGravityToWorld(FVector(0.f, 0.f, -TraceDist));
+		const FVector Down = TraceDist * GetGravityDirection();
 		QueryParams.TraceTag = SCENE_QUERY_STAT_NAME_ONLY(FloorLineTrace);
 
 		FHitResult Hit(1.f);
@@ -702,31 +722,32 @@ float UVRBaseCharacterMovementComponent::SlideAlongSurface(const FVector& Delta,
 		return 0.f;
 	}
 
-	FVector Normal(RotateWorldToGravity(InNormal));
+	FVector Normal(InNormal);
+	const FVector::FReal NormalZ = GetGravitySpaceZ(Normal);
 	if (IsMovingOnGround())
 	{
 		// We don't want to be pushed up an unwalkable surface.
-		if (Normal.Z > 0.f)
+		if (NormalZ > 0.f)
 		{
 			if (!IsWalkable(Hit))
 			{
-				Normal = Normal.GetSafeNormal2D();
+				Normal = ProjectToGravityFloor(Normal).GetSafeNormal();
 			}
 		}
-		else if (Normal.Z < -UE_KINDA_SMALL_NUMBER)
+		else if (NormalZ < -UE_KINDA_SMALL_NUMBER)
 		{
 			// Don't push down into the floor when the impact is on the upper portion of the capsule.
 			if (CurrentFloor.FloorDist < MIN_FLOOR_DIST && CurrentFloor.bBlockingHit)
 			{
-				const FVector FloorNormal = RotateWorldToGravity(CurrentFloor.HitResult.Normal);
-				const bool bFloorOpposedToMovement = (RotateWorldToGravity(Delta) | FloorNormal) < 0.f && (FloorNormal.Z < 1.f - UE_DELTA);
+				const FVector FloorNormal = CurrentFloor.HitResult.Normal;
+				const bool bFloorOpposedToMovement = (Delta | FloorNormal) < 0.f && (GetGravitySpaceZ(FloorNormal) < 1.f - UE_DELTA);
 
 				if (bFloorOpposedToMovement)
 				{
 					Normal = FloorNormal;
 				}
 
-				Normal = Normal.GetSafeNormal2D();
+				Normal = ProjectToGravityFloor(Normal).GetSafeNormal();
 			}
 		}
 	}
@@ -743,9 +764,9 @@ float UVRBaseCharacterMovementComponent::SlideAlongSurface(const FVector& Delta,
 	// that we have already validated the floor normal.
 	// Otherwise just pass in as normal, either way skip the parents implementation as we are doing it now.
 	if (IsMovingOnGround() || (MovementMode == MOVE_Custom && CustomMovementMode == (uint8)EVRCustomMovementMode::VRMOVE_Climbing))
-		return Super::Super::SlideAlongSurface(Delta * VRWallSlideScaler, Time, RotateGravityToWorld(Normal), Hit, bHandleImpact);
+		return Super::Super::SlideAlongSurface(Delta * VRWallSlideScaler, Time, Normal, Hit, bHandleImpact);
 	else
-		return Super::Super::SlideAlongSurface(Delta, Time, RotateGravityToWorld(Normal), Hit, bHandleImpact);
+		return Super::Super::SlideAlongSurface(Delta, Time, Normal, Hit, bHandleImpact);
 }
 
 /*void UVRBaseCharacterMovementComponent::SetCrouchedHalfHeight(float NewCrouchedHalfHeight)
@@ -1700,6 +1721,17 @@ void UVRBaseCharacterMovementComponent::SimulatedTick(float DeltaSeconds)
 			const FQuat NewCapsuleRotation = UpdatedComponent->GetComponentQuat();
 			if (Mesh == CharacterOwner->GetMesh() && !NewCapsuleRotation.Equals(OldRotationQuat, 1e-6f) && ClientPredictionData)
 			{
+				// #TODO: The below is new in 5.6, i don't have saved capsule rotation, don't think i need this change for base char
+				/* 
+									// Add delta rotation to the target rotation and original offset. Otherwise this object will move back toward the old rotation.
+					const FQuat RotationDelta = NewCapsuleRotation - SavedCapsuleRotation;
+					ClientPredictionData->MeshRotationTarget += RotationDelta;
+					ClientPredictionData->OriginalMeshRotationOffset += RotationDelta;
+
+					// Update the MeshRotationOffset to match the capsule rotation.
+					ClientPredictionData->MeshRotationOffset = NewCapsuleRotation;
+				*/
+
 				// Smoothing should lerp toward this new rotation target, otherwise it will just try to go back toward the old rotation.
 				ClientPredictionData->MeshRotationTarget = NewCapsuleRotation;
 				Mesh->SetRelativeLocationAndRotation(SavedMeshRelativeLocation, CharacterOwner->GetBaseRotationOffset());
@@ -1920,13 +1952,18 @@ void UVRBaseCharacterMovementComponent::MoveAutonomous(
 		static const auto CVarEnableQueuedAnimEventsOnServer = IConsoleManager::Get().FindConsoleVariable(TEXT("a.EnableQueuedAnimEventsOnServer"));
 		if (CVarEnableQueuedAnimEventsOnServer->GetInt())
 		{
-			if (const UAnimInstance* AnimInstance = OwnerMesh->GetAnimInstance())
+			if (UAnimInstance* AnimInstance = OwnerMesh->GetAnimInstance())
 			{
 				if (OwnerMesh->VisibilityBasedAnimTickOption <= EVisibilityBasedAnimTickOption::AlwaysTickPose && AnimInstance->NeedsUpdate())
 				{
 					// If we are doing a full graph update on the server but its doing a parallel update,
-					// trigger events right away since these are notifies queued from the montage update and we could be receiving multiple ServerMoves per frame.
+					// trigger events right away since these are notifies queued from the montage update, and we could be receiving multiple ServerMoves per frame.
 					OwnerMesh->ConditionallyDispatchQueuedAnimEvents();
+
+					// We need to manually clear the anim notify queue (since normally its only is cleared in PreUpdateAnimation()) otherwise if animation ticks, the notifies queued from the ServerMove would fire twice.
+					AnimInstance->ClearQueuedAnimEvents(false);
+
+					// When animation ticks, we want its queued events to be triggered.
 					OwnerMesh->AllowQueuedAnimEventsNextDispatch();
 				}
 			}
@@ -1934,7 +1971,7 @@ void UVRBaseCharacterMovementComponent::MoveAutonomous(
 		else
 		{
 			// Revert back to old behavior if wanted/needed.
-			if (OwnerMesh->ShouldOnlyTickMontages(DeltaTime))
+			if (OwnerMesh->ShouldOnlyTickMontages(DeltaTime) || OwnerMesh->ShouldOnlyTickMontagesAndRefreshBones(DeltaTime))
 			{
 				OwnerMesh->ConditionallyDispatchQueuedAnimEvents();
 			}
@@ -2018,12 +2055,12 @@ void UVRBaseCharacterMovementComponent::SmoothCorrection(const FVector& OldLocat
 
 		// The mesh doesn't move, but the capsule does so we have a new offset.
 		FVector NewToOldVector = (OldWorldLocation - NewWorldLocation);
-		if (bIsNavWalkingOnServer && FMath::Abs(NewToOldVector.Z) < NavWalkingFloorDistTolerance)
+		if (bIsNavWalkingOnServer && FMath::Abs(GetGravitySpaceZ(NewToOldVector)) < NavWalkingFloorDistTolerance)
 		{
 			// ignore smoothing on Z axis
 			// don't modify new location (local simulation result), since it's probably more accurate than server data
 			// and shouldn't matter as long as difference is relatively small
-			NewToOldVector.Z = 0;
+			NewToOldVector = ProjectToGravityFloor(NewToOldVector);
 		}
 
 		const float DistSq = NewToOldVector.SizeSquared();

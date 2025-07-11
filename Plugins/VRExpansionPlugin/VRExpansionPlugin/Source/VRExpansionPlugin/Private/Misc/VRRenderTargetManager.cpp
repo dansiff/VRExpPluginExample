@@ -3,12 +3,17 @@
 #include "Misc/VRRenderTargetManager.h"
 #include UE_INLINE_GENERATED_CPP_BY_NAME(VRRenderTargetManager)
 
+#include "Engine/World.h"
+#include "GlobalRenderResources.h"
+#include "Components/ActorComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/Texture2D.h"
 #include "TextureResource.h"
+#include "PixelFormat.h"
 #include "CanvasTypes.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetRenderingLibrary.h"
@@ -444,7 +449,7 @@ void ARenderTargetReplicationProxy::SendInitMessage()
 
 void ARenderTargetReplicationProxy::SendNextDataBlob()
 {
-	if (!IsValid(this) || !this->GetOwner() || !IsValid(this->GetOwner()))
+	if (!IsValidChecked(this) || !this->GetOwner() || !IsValid(this->GetOwner()))
 	{	
 		TextureStore.Reset();
 		TextureStore.PackedData.Empty();
@@ -483,6 +488,14 @@ void ARenderTargetReplicationProxy::SendNextDataBlob()
 			GetWorld()->GetTimerManager().ClearTimer(SendTimer_Handle);
 		BlobNum = 0;
 	}
+}
+
+void ARenderTargetReplicationProxy::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (SendTimer_Handle.IsValid())
+		GetWorld()->GetTimerManager().ClearTimer(SendTimer_Handle);
+
+	Super::EndPlay(EndPlayReason);
 }
 
 //=============================================================================
@@ -1632,7 +1645,7 @@ bool RLE_Funcs::RLEEncodeBuffer(DataType* BufferToEncode, uint32 EncodeLength, T
 
 	// Resize the out array to fit compressed contents
 	uint32 Wrote = loc - EncodedLine->GetData();
-	EncodedLine->RemoveAt(Wrote, EncodedLine->Num() - Wrote, true);
+	EncodedLine->RemoveAt(Wrote, EncodedLine->Num() - Wrote, EAllowShrinking::Yes);
 
 	// If the compression performed worse than the original file size, throw the results array and use the original instead.
 	// This will almost never happen with voxels but can so should be accounted for.

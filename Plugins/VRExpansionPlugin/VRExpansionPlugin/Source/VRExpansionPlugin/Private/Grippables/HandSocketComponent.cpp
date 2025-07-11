@@ -3,17 +3,23 @@
 #include "Grippables/HandSocketComponent.h"
 #include UE_INLINE_GENERATED_CPP_BY_NAME(HandSocketComponent)
 
+#include "CoreMinimal.h"
+#include "UObject/UObjectIterator.h"
 #include "Engine/CollisionProfile.h"
+#include "BoneContainer.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimInstanceProxy.h"
 #include "Animation/PoseSnapshot.h"
 #include "Animation/AnimData/AnimDataModel.h"
+#include "Engine/SkinnedAssetCommon.h"
+#include "Engine/SkinnedAsset.h"
 //#include "VRExpansionFunctionLibrary.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/PoseableMeshComponent.h"
 #include "GripMotionControllerComponent.h"
 //#include "VRGripInterface.h"
 //#include "VRBPDatatypes.h"
+#include "Engine/SkinnedAssetCommon.h"
 #include "Net/UnrealNetwork.h"
 #include "Serialization/CustomVersion.h"
 
@@ -200,7 +206,8 @@ bool UHandSocketComponent::GetAnimationSequenceAsPoseSnapShot(UAnimSequence* InA
 		const FReferenceSkeleton& RefSkeleton = (TargetMesh) ? TargetMesh->GetSkinnedAsset()->GetRefSkeleton() : InAnimationSequence->GetSkeleton()->GetReferenceSkeleton();
 		FTransform LocalTransform;
 
-		const TArray<FTrackToSkeletonMap>& TrackMap = InAnimationSequence->GetCompressedTrackToSkeletonMapTable();
+		//const TArray<FTrackToSkeletonMap>& TrackMap = InAnimationSequence->GetCompressedTrackToSkeletonMapTable();
+		const TArray<FTrackToSkeletonMap>& TrackMap = InAnimationSequence->GetCompressedData().Get().CompressedTrackToSkeletonMapTable;
 		int32 TrackIndex = INDEX_NONE;
 
 		OutPoseSnapShot.LocalTransforms.Reserve(OutPoseSnapShot.BoneNames.Num());
@@ -231,8 +238,9 @@ bool UHandSocketComponent::GetAnimationSequenceAsPoseSnapShot(UAnimSequence* InA
 
 			if (TrackIndex != INDEX_NONE && (!bSkipRootBone || TrackIndex != 0))
 			{
-				double TrackLocation = 0.0f;			
-				InAnimationSequence->GetBoneTransform(LocalTransform, FSkeletonPoseBoneIndex(TrackMap[TrackIndex].BoneTreeIndex), TrackLocation, false);
+				//double TrackLocation = 0.0f;
+				// FAnimExtraContext default is fine, its a zero track location
+				InAnimationSequence->GetBoneTransform(LocalTransform, FSkeletonPoseBoneIndex(TrackMap[TrackIndex].BoneTreeIndex), FAnimExtractContext(), false);
 			}
 			else
 			{
@@ -311,7 +319,7 @@ bool UHandSocketComponent::GetBlendedPoseSnapShot(FPoseSnapshot& PoseSnapShot, U
 		const FReferenceSkeleton& RefSkeleton = (TargetMesh) ? TargetMesh->GetSkinnedAsset()->GetRefSkeleton() : HandTargetAnimation->GetSkeleton()->GetReferenceSkeleton();
 		FTransform LocalTransform;
 
-		const TArray<FTrackToSkeletonMap>& TrackMap = HandTargetAnimation->GetCompressedTrackToSkeletonMapTable();
+		const TArray<FTrackToSkeletonMap>& TrackMap = HandTargetAnimation->GetCompressedData().Get().CompressedTrackToSkeletonMapTable;
 		int32 TrackIndex = INDEX_NONE;
 
 		for (int32 BoneNameIndex = 0; BoneNameIndex < PoseSnapShot.BoneNames.Num(); ++BoneNameIndex)
@@ -339,8 +347,9 @@ bool UHandSocketComponent::GetBlendedPoseSnapShot(FPoseSnapshot& PoseSnapShot, U
 
 			if (TrackIndex != INDEX_NONE && (!bSkipRootBone || TrackIndex != 0))
 			{
-				double TrackLocation = 0.0f;
-				HandTargetAnimation->GetBoneTransform(LocalTransform, FSkeletonPoseBoneIndex(TrackMap[TrackIndex].BoneTreeIndex), TrackLocation, false);
+				//double TrackLocation = 0.0f;
+				// FAnimExtraContext default is fine, its a zero track location
+				HandTargetAnimation->GetBoneTransform(LocalTransform, FSkeletonPoseBoneIndex(TrackMap[TrackIndex].BoneTreeIndex), FAnimExtractContext(), false);
 			}
 			else
 			{
@@ -391,7 +400,8 @@ bool UHandSocketComponent::GetBlendedPoseSnapShot(FPoseSnapshot& PoseSnapShot, U
 		PoseSnapShot.LocalTransforms.Empty();
 		TargetMesh->GetBoneNames(PoseSnapShot.BoneNames);
 
-		PoseSnapShot.LocalTransforms = TargetMesh->GetSkinnedAsset()->GetSkeleton()->GetRefLocalPoses();
+		//PoseSnapShot.LocalTransforms = TargetMesh->GetSkinnedAsset()->GetSkeleton()->GetRefLocalPoses();
+		PoseSnapShot.LocalTransforms = TargetMesh->GetSkinnedAsset()->GetRefSkeleton().GetRefBonePose();
 
 		FQuat DeltaQuat = FQuat::Identity;
 		FName TargetBoneName = NAME_None;
@@ -602,7 +612,7 @@ FTransform UHandSocketComponent::GetBoneTransformAtTime(UAnimSequence* MyAnimSeq
 
 	if (const IAnimationDataModel* AnimModel = AnimController.GetModel())
 	{
-		const TArray<FTrackToSkeletonMap>& TrackMap = MyAnimSequence->GetCompressedTrackToSkeletonMapTable();
+		const TArray<FTrackToSkeletonMap>& TrackMap = MyAnimSequence->GetCompressedData().Get().CompressedTrackToSkeletonMapTable;
 
 		int32 TrackIndex = INDEX_NONE;
 		if (BoneIdx != INDEX_NONE && BoneIdx < TrackMap.Num() && TrackMap[BoneIdx].BoneTreeIndex == BoneIdx)
@@ -628,7 +638,9 @@ FTransform UHandSocketComponent::GetBoneTransformAtTime(UAnimSequence* MyAnimSeq
 			FSkeletonPoseBoneIndex BoneIndex(TrackMap[TrackIndex].BoneTreeIndex);
 			if (BoneIndex.IsValid())
 			{
-				MyAnimSequence->GetBoneTransform(BoneTransform, BoneIndex, /*AnimTime*/ tracklen, bUseRawDataOnly);
+				FAnimExtractContext NewContext;
+				NewContext.CurrentTime = tracklen;
+				MyAnimSequence->GetBoneTransform(BoneTransform, BoneIndex, /*AnimTime*/ NewContext, bUseRawDataOnly);
 				return BoneTransform;
 			}
 		}
@@ -686,7 +698,7 @@ void UHandSocketComponent::OnRegister()
 			{
 				if (HandPreviewMaterial)
 				{
-					HandVisualizerComponent->SetMaterial(0, (UMaterialInterface*)HandPreviewMaterial);
+					HandVisualizerComponent->SetMaterial(0, HandPreviewMaterial);
 				}
 				HandVisualizerComponent->SetSkinnedAssetAndUpdate(VisualizationMesh);
 			}
@@ -776,9 +788,21 @@ void UHandSocketComponent::PoseVisualizationToAnimation(bool bForceRefresh)
 	if (!HandTargetAnimation)
 	{
 		// Store local poses for posing
-		LocalPoses = HandVisualizerComponent->GetSkinnedAsset()->GetSkeleton()->GetRefLocalPoses();
+		LocalPoses = HandVisualizerComponent->GetSkinnedAsset()->GetRefSkeleton().GetRefBonePose();
 	}
 
+
+
+	// Check out of the skin cache, the poses don't update otherwise when enabled
+	int32 NumLODs = HandVisualizerComponent->GetNumLODs();
+	HandVisualizerComponent->SkinCacheUsage.Empty(NumLODs);
+
+	for (int nLODs = 0; nLODs <= NumLODs; ++nLODs)
+	{
+		HandVisualizerComponent->SkinCacheUsage.Add(ESkinCacheUsage::Disabled);
+	}
+
+	// Now Pose the bones
 	TArray<FName> BonesNames;
 	HandVisualizerComponent->GetBoneNames(BonesNames);
 	int32 Bones = HandVisualizerComponent->GetNumBones();
@@ -825,6 +849,7 @@ void UHandSocketComponent::PoseVisualizationToAnimation(bool bForceRefresh)
 		else
 		{
 			BoneTrans = LocalPoses[i];
+			//BoneTrans = HandVisualizerComponent->GetSkinnedAsset()->GetRefSkeleton().GetRefBonePose()[i];
 		}
 
 		BoneTrans = BoneTrans * ParentTrans;// *HandVisualizerComponent->GetComponentTransform();
@@ -835,7 +860,6 @@ void UHandSocketComponent::PoseVisualizationToAnimation(bool bForceRefresh)
 		BoneTrans.ConcatenateRotation(DeltaQuat);
 		BoneTrans.NormalizeRotation();
 		HandVisualizerComponent->SetBoneTransformByName(BonesNames[i], BoneTrans, EBoneSpaces::ComponentSpace);
-
 	}
 
 	if (HandVisualizerComponent && (!bTickedPose || bForceRefresh))
@@ -1011,3 +1035,10 @@ FGameplayTagContainer& UHandSocketComponent::GetGameplayTags()
 /////////////////////////////////////////////////
 //- End Push networking getter / setter functions
 /////////////////////////////////////////////////
+
+void UHandSocketAnimInstance::NativeInitializeAnimation()
+{
+	Super::NativeInitializeAnimation();
+
+	OwningSocket = Cast<UHandSocketComponent>(GetOwningComponent()->GetAttachParent());
+}

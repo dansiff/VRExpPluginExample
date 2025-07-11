@@ -7,7 +7,9 @@
 #include "GameplayTagAssetInterface.h"
 #include "Components/SceneComponent.h"
 #include "Animation/AnimInstance.h"
+#include "Animation/BoneReference.h"
 #include "Misc/Guid.h"
+
 #include "HandSocketComponent.generated.h"
 
 class USkeletalMeshComponent;
@@ -463,7 +465,7 @@ public:
 #if WITH_EDITORONLY_DATA
 	// Material to apply to the hand
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Hand Visualization")
-		TObjectPtr<UMaterial> HandPreviewMaterial;
+		TObjectPtr<UMaterialInterface> HandPreviewMaterial;
 
 #endif
 };
@@ -478,10 +480,5 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, transient, Category = "Socket Data")
 		TObjectPtr<UHandSocketComponent> OwningSocket;
 
-	virtual void NativeInitializeAnimation() override
-	{
-		Super::NativeInitializeAnimation();
-
-		OwningSocket = Cast<UHandSocketComponent>(GetOwningComponent()->GetAttachParent());
-	}
+	virtual void NativeInitializeAnimation() override;
 };

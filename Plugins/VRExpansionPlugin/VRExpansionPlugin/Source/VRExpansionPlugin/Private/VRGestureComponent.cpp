@@ -2,6 +2,8 @@
 #include UE_INLINE_GENERATED_CPP_BY_NAME(VRGestureComponent)
 
 #include "VRBaseCharacter.h"
+#include "Engine/Engine.h"
+#include "Engine/World.h"
 #include "Components/SplineMeshComponent.h"
 #include "Components/SplineComponent.h"
 #include "Components/LineBatchComponent.h"
@@ -22,7 +24,6 @@ UVRGestureComponent::UVRGestureComponent(const FObjectInitializer& ObjectInitial
 	maxSlope = 3;// INT_MAX;
 	//globalThreshold = 10.0f;
 	SameSampleTolerance = 0.1f;
-	bGestureChanged = false;
 	MirroringHand = EVRGestureMirrorMode::GES_NoMirror;
 	bDrawSplinesCurved = true;
 	bGetGestureInWorldSpace = true;
@@ -124,14 +125,14 @@ void UGesturesDatabase::FillSplineWithGesture(FVRGesture &Gesture, USplineCompon
 
 }
 
-void UVRGestureComponent::BeginRecording(bool bRunDetection, bool bFlattenGesture, bool bDrawGesture, bool bDrawAsSpline, int SamplingHTZ, int SampleBufferSize, float ClampingTolerance)
+void UVRGestureComponent::BeginRecording(bool bRunDetection, EVRGestureFlattenAxis FlattenAxis, bool bDrawGesture, bool bDrawAsSpline, int SamplingHTZ, int SampleBufferSize, float ClampingTolerance)
 {
 	RecordingBufferSize = SampleBufferSize;
 	RecordingDelta = 1.0f / SamplingHTZ;
 	RecordingClampingTolerance = ClampingTolerance;
 	bDrawRecordingGesture = bDrawGesture;
 	bDrawRecordingGestureAsSpline = bDrawAsSpline;
-	bRecordingFlattenGesture = bFlattenGesture;
+	RecordingFlattenAxis = FlattenAxis;
 	GestureLog.GestureSize.Init();
 
 	// Reset does the reserve already
@@ -221,8 +222,13 @@ void UVRGestureComponent::CaptureGestureFrame()
 
 	if (CurrentState == EVRGestureState::GES_Recording)
 	{
-		if (bRecordingFlattenGesture)
-			NewSample.X = 0;
+		switch (RecordingFlattenAxis)
+		{
+		case EVRGestureFlattenAxis::GES_FlattenX: {NewSample.X = 0.0; }break;
+		case EVRGestureFlattenAxis::GES_FlattenY: {NewSample.Y = 0.0; }break;
+		case EVRGestureFlattenAxis::GES_FlattenZ: {NewSample.Z = 0.0; }break;
+		default: {}break;
+		}
 
 		if (RecordingClampingTolerance > 0.0f)
 		{
@@ -239,7 +245,7 @@ void UVRGestureComponent::CaptureGestureFrame()
 		// Pop off oldest sample
 		if (GestureLog.Samples.Num() >= RecordingBufferSize)
 		{
-			GestureLog.Samples.Pop(false);
+			GestureLog.Samples.Pop(EAllowShrinking::No);
 			bClearLatestSpline = true;
 		}
 		
@@ -538,7 +544,7 @@ void UVRGestureComponent::DrawDebugGesture(UObject* WorldContextObject, FTransfo
 			FVector MirrorVector = FVector(1.f, -1.f, 1.f); // Only mirroring on Y axis to flip Left/Right
 
 															// this means foreground lines can't be persistent 
-			ULineBatchComponent* const LineBatcher = (InWorld ? ((DepthPriority == SDPG_Foreground) ? InWorld->ForegroundLineBatcher : ((bPersistentLines || (LifeTime > 0.f)) ? InWorld->PersistentLineBatcher : InWorld->LineBatcher)) : NULL);
+			ULineBatchComponent* const LineBatcher = (InWorld ? ((DepthPriority == SDPG_Foreground) ? InWorld->GetLineBatcher(UWorld::ELineBatcherType::Foreground) : ((bPersistentLines || (LifeTime > 0.f)) ? InWorld->GetLineBatcher(UWorld::ELineBatcherType::WorldPersistent) : InWorld->GetLineBatcher(UWorld::ELineBatcherType::World))) : NULL);
 
 			if (LineBatcher != NULL)
 			{
@@ -594,8 +600,8 @@ bool UGesturesDatabase::ImportSplineAsGesture(USplineComponent * HostSplineCompo
 
 	float LastDistance = 0.f;
 	float ThisDistance = 0.f;
-	FVector LastDistanceV;
-	FVector ThisDistanceV;
+	FVector LastDistanceV = FVector::ZeroVector;
+	FVector ThisDistanceV = FVector::ZeroVector;
 	FVector DistNormal;
 	float DistAlongSegment = 0.f;
 

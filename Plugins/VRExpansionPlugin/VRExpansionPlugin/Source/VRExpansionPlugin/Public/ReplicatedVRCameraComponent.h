@@ -101,10 +101,15 @@ public:
 
 	// Get Camera View is no longer required, they finally broke the HMD logic out into its own section!!
 	//virtual void GetCameraView(float DeltaTime, FMinimalViewInfo& DesiredView) override;
-	virtual void HandleXRCamera() override;
+	virtual void HandleXRCamera(float DeltaTime) override;
 
 	UPROPERTY(EditDefaultsOnly, ReplicatedUsing = OnRep_ReplicatedCameraTransform, Category = "ReplicatedCamera|Networking")
 	FBPVRComponentPosRep ReplicatedCameraTransform;
+
+	// Returns the actual tracked transform of the HMD, as with RetainRoomscale = False we do not set the camera to it
+	// Can also just use the HMD function library but this is a fast way if you already have a camera reference
+	UFUNCTION(BlueprintPure, Category = "ReplicatedCamera|Tracking")
+		FTransform GetHMDTrackingTransform();
 
 	FVector LastUpdatesRelativePosition = FVector::ZeroVector;
 	FRotator LastUpdatesRelativeRotation = FRotator::ZeroRotator;
@@ -161,14 +166,7 @@ public:
 	VRBaseCharTransformRPC_Pointer OverrideSendTransform;
 
 	// Need this as I can't think of another way for an actor component to make sure it isn't on the server
-	inline bool IsLocallyControlled() const
-	{
-		// I like epics new authority check more than my own
-		const AActor* MyOwner = GetOwner();
-		return MyOwner->HasLocalNetOwner();
-		//const APawn* MyPawn = Cast<APawn>(MyOwner);
-		//return MyPawn ? MyPawn->IsLocallyControlled() : false;// (MyOwner->Role == ENetRole::ROLE_Authority);
-	}
+	bool IsLocallyControlled() const;
 
 	//bool IsServer();
 };

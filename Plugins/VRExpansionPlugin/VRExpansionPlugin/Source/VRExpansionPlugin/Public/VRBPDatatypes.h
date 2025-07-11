@@ -14,6 +14,7 @@
 
 class UGripMotionControllerComponent;
 class UVRGripScriptBase;
+class UPrimitiveComponent;
 
 // Custom movement modes for the characters
 UENUM(BlueprintType)
@@ -1467,6 +1468,13 @@ public:
 	float LerpSpeed;
 	FTransform OnGripTransform;
 
+	/////////////////////
+	// TMP: Velocity calculation addition for 5.4 #TODO: Remove this when the bug is fixed
+	FVector LinVel = FVector::ZeroVector;
+	FVector RotVel = FVector::ZeroVector;
+	FTransform LastVelWorldTrans; // Identity by default
+	///////////////////////
+
 	UPROPERTY(BlueprintReadWrite, NotReplicated, Category = "Settings")
 	bool bIsLerping;
 
@@ -1550,15 +1558,11 @@ public:
 	}
 
 
-	FORCEINLINE AActor * GetGrippedActor() const
-	{
-		return Cast<AActor>(GrippedObject);
-	}
+	AActor* GetGrippedActor() const;
 
-	FORCEINLINE UPrimitiveComponent * GetGrippedComponent() const
-	{
-		return Cast<UPrimitiveComponent>(GrippedObject);
-	}
+	UPrimitiveComponent* GetGrippedComponent() const;
+
+	UPrimitiveComponent* GetGripPrimitiveComponent() const;
 
 	//Check if a grip is the same as another, the only things I check for are the actor / component
 	//This is here for the Find() function from TArray
@@ -1580,13 +1584,7 @@ public:
 		return false;
 	}
 
-	FORCEINLINE bool operator==(const UPrimitiveComponent * Other) const
-	{
-		if (Other && GrippedObject && GrippedObject == (const UObject*)Other)
-			return true;
-
-		return false;
-	}
+	bool operator==(const UPrimitiveComponent* Other) const;
 
 	FORCEINLINE bool operator==(const UObject * Other) const
 	{

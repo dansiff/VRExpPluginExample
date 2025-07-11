@@ -6,6 +6,8 @@
 //#include "Runtime/Engine/Private/EnginePrivate.h"
 //#include "WorldCollision.h"
 #include "PhysicsPublic.h"
+#include "Engine/World.h"
+#include "Engine/Engine.h"
 #include "Engine/ScopedMovementUpdate.h"
 #include "SceneManagement.h"
 #include "PrimitiveSceneProxy.h"
@@ -466,7 +468,7 @@ void UVRRootComponent::UpdateCharacterCapsuleOffset()
 {
 	if (owningVRChar && !owningVRChar->bRetainRoomscale && owningVRChar->NetSmoother)
 	{
-		if (!FMath::IsNearlyEqual(LastCapsuleHalfHeight, CapsuleHalfHeight))
+		if (bCenterCapsuleOnHMD || !FMath::IsNearlyEqual(LastCapsuleHalfHeight, CapsuleHalfHeight))
 		{
 			owningVRChar->NetSmoother->SetRelativeLocation(GetTargetHeightOffset(), false, nullptr, ETeleportType::TeleportPhysics);
 
@@ -504,6 +506,8 @@ void UVRRootComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, 
 
 	if (IsLocallyControlled())
 	{
+		bool bHadBadTracking = false;
+
 		if (owningVRChar && owningVRChar->bTrackingPaused)
 		{
 			curCameraLoc = owningVRChar->PausedTrackingLoc;
@@ -522,6 +526,7 @@ void UVRRootComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, 
 			{
 				curCameraLoc = lastCameraLoc;
 				curCameraRot = lastCameraRot;
+				bHadBadTracking = true;
 			}
 			else
 			{
@@ -560,7 +565,7 @@ void UVRRootComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, 
 		
 
 		// Can adjust the relative tolerances to remove jitter and some update processing
-		if (!bRetainRoomscale || (!curCameraLoc.Equals(lastCameraLoc, 0.01f) || !curCameraRot.Equals(lastCameraRot, 0.01f)))
+		if (!bHadBadTracking && (!bRetainRoomscale || (!curCameraLoc.Equals(lastCameraLoc, 0.01f) || !curCameraRot.Equals(lastCameraRot, 0.01f))))
 		{
 			// Also calculate vector of movement for the movement component
 			FVector LastPosition = OffsetComponentToWorld.GetLocation();
@@ -589,9 +594,23 @@ void UVRRootComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, 
 			Params.bFindInitialOverlaps = true;
 			bool bBlockingHit = false;
 
-			if (bUseWalkingCollisionOverride && bRetainRoomscale)
+			if (bUseWalkingCollisionOverride /* && bRetainRoomscale*/)
 			{
-				FVector TargetWorldLocation = OffsetComponentToWorld.GetLocation();
+				FVector TargetWorldLocation = FVector::ZeroVector;
+				
+				if (bRetainRoomscale)
+				{
+					TargetWorldLocation = OffsetComponentToWorld.GetLocation();
+				}
+				else // Not Retained Roomscale
+				{
+					FVector NewLocation = StoredCameraRotOffset.RotateVector(FVector(VRCapsuleOffset.X, VRCapsuleOffset.Y, 0.0f)) + curCameraLoc;
+					FVector PlanerLocation = NewLocation - lastCameraLoc;
+					PlanerLocation.Z = 0.0f;
+					DifferenceFromLastFrame = GetComponentTransform().TransformVector(PlanerLocation);
+					TargetWorldLocation = LastPosition + DifferenceFromLastFrame;
+				}
+				
 				bool bAllowWalkingCollision = false;
 				if (CharMove != nullptr)
 				{
@@ -636,7 +655,6 @@ void UVRRootComponent::TickComponent(float DeltaTime, enum ELevelTick TickType, 
 				}
 				else
 				{
-
 					// Run this first so we get full fidelity on the relative space calculation
 					FVector NewLocation = StoredCameraRotOffset.RotateVector(FVector(VRCapsuleOffset.X, VRCapsuleOffset.Y, 0.0f)) + curCameraLoc;
 					FVector PlanerLocation = NewLocation - lastCameraLoc;
@@ -944,7 +962,7 @@ bool UVRRootComponent::MoveComponentImpl(const FVector& Delta, const FQuat& NewR
 	//CSV_SCOPED_TIMING_STAT(PrimitiveComponent, MoveComponentTime);
 
 	// static things can move before they are registered (e.g. immediately after streaming), but not after.
-	if (!IsValid(this) || (this->Mobility == EComponentMobility::Static && IsRegistered()))//|| CheckStaticMobilityAndWarn(PrimitiveComponentStatics::MobilityWarnText))
+	if (!IsValidChecked(this) || (this->Mobility == EComponentMobility::Static && IsRegistered()))//|| CheckStaticMobilityAndWarn(PrimitiveComponentStatics::MobilityWarnText))
 	{
 		if (OutHit)
 		{
@@ -1215,7 +1233,7 @@ bool UVRRootComponent::MoveComponentImpl(const FVector& Delta, const FQuat& NewR
 
 	// Handle blocking hit notifications. Avoid if pending kill (which could happen after overlaps).
 	const bool bAllowHitDispatch = !BlockingHit.bStartPenetrating || !(MoveFlags & MOVECOMP_DisableBlockingOverlapDispatch);
-	if (BlockingHit.bBlockingHit && bAllowHitDispatch && IsValid(this))
+	if (BlockingHit.bBlockingHit && bAllowHitDispatch && IsValidChecked(this))
 	{
 		check(bFilledHitResult);
 		if (IsDeferringMovementUpdates())
@@ -1311,7 +1329,7 @@ bool UVRRootComponent::UpdateOverlapsImpl(const TOverlapArrayView* NewPendingOve
 			TInlineOverlapPointerArray NewOverlappingComponentPtrs;
 
 			// If pending kill, we should not generate any new overlaps. Also not if overlaps were just disabled during BeginComponentOverlap.
-			if (IsValid(this) && GetGenerateOverlapEvents())
+			if (IsValidChecked(this) && GetGenerateOverlapEvents())
 			{
 				// 4.17 converted to auto cvar
 				static const auto CVarAllowCachedOverlaps = IConsoleManager::Get().FindConsoleVariable(TEXT("p.AllowCachedOverlaps"));
@@ -1535,7 +1553,7 @@ bool UVRRootComponent::IsLocallyControlled() const
 		// Simulated proxies should already have the new height from the server
 		if (!owningVRChar->bRetainRoomscale && (owningVRChar->GetNetMode() < ENetMode::NM_Client || IsLocallyControlled()))
 		{
-			MoveComponent(this->GetComponentQuat().GetUpVector() * (Offset * this->GetComponentScale().Z), GetComponentQuat(), true, nullptr, EMoveComponentFlags::MOVECOMP_NoFlags, ETeleportType::TeleportPhysics);
+			MoveComponent(this->GetComponentQuat().GetUpVector() * (Offset * this->GetComponentScale().Z), GetComponentQuat(), false, nullptr, EMoveComponentFlags::MOVECOMP_NoFlags, ETeleportType::TeleportPhysics);
 		}
 		/*else
 		{
@@ -1543,7 +1561,7 @@ bool UVRRootComponent::IsLocallyControlled() const
 			GenerateOffsetToWorld();
 		}*/
 
-		if (!owningVRChar->bRetainRoomscale && !IsLocallyControlled())
+		if (!owningVRChar->bRetainRoomscale && !IsLocallyControlled() && !IsNetMode(NM_DedicatedServer))
 		{
 			// Don't smooth this change in mesh position
 			FNetworkPredictionData_Client_Character* ClientData = owningVRChar->GetCharacterMovement()->GetPredictionData_Client_Character();
@@ -1563,7 +1581,7 @@ bool UVRRootComponent::IsLocallyControlled() const
 
 void UVRRootComponent::UpdatePhysicsVolume(bool bTriggerNotifiers)
 {
-	if (GetShouldUpdatePhysicsVolume() && IsValid(this))
+	if (GetShouldUpdatePhysicsVolume() && IsValidChecked(this))
 	{
 		//	SCOPE_CYCLE_COUNTER(STAT_UpdatePhysicsVolume);
 		if (UWorld * MyWorld = GetWorld())

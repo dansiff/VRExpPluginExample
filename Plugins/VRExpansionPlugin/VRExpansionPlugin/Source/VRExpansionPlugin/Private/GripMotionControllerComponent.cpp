@@ -249,7 +249,7 @@ void UGripMotionControllerComponent::RegisterEndPhysicsTick(bool bRegister)
 void UGripMotionControllerComponent::EndPhysicsTickComponent(FGripComponentEndPhysicsTickFunction& ThisTickFunction)
 {
 
-	if (!IsValid(this))
+	if (!IsValidChecked(this))
 		return;
 
 	// Now check if we should turn off any post physics ticking
@@ -744,6 +744,14 @@ void UGripMotionControllerComponent::GetPhysicsVelocities(const FBPActorGripInfo
 	{
 		CurAngularVelocity = FVector::ZeroVector;
 		CurLinearVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	// TMP #TODO: Fix when 5.4 bug is fixed
+	if (!primComp->IsSimulatingPhysics())
+	{
+		CurLinearVelocity = Grip.LinVel;
+		CurAngularVelocity = Grip.RotVel;
 		return;
 	}
 
@@ -3116,7 +3124,7 @@ bool UGripMotionControllerComponent::NotifyGrip(FBPActorGripInformation &NewGrip
 
 	case EGripCollisionType::AttachmentGrip:
 	{
-		if (root)
+		if (IsValid(root))
 			root->SetSimulatePhysics(false);
 
 		// Move it to the correct location automatically
@@ -3143,7 +3151,7 @@ bool UGripMotionControllerComponent::NotifyGrip(FBPActorGripInformation &NewGrip
 	default: 
 	{
 
-		if (root)
+		if (IsValid(root))
 		{
 			if (root->IsSimulatingPhysics())
 			{
@@ -3176,6 +3184,13 @@ bool UGripMotionControllerComponent::NotifyGrip(FBPActorGripInformation &NewGrip
 
 	if (!bIsReInit)
 	{
+		// TMP #TODO: Remove when 5.4 velocity bug is fixed
+		if (IsValid(root))
+		{
+			// Set initial world transform for velocity
+			NewGrip.LastVelWorldTrans = root->GetComponentTransform();
+		}
+
 		// Broadcast a new grip
 		OnGrippedObject.Broadcast(NewGrip);
 		if (!LocallyGrippedObjects.Contains(NewGrip.GripID) && !GrippedObjects.Contains(NewGrip.GripID))
@@ -4295,7 +4310,7 @@ bool UGripMotionControllerComponent::TeleportMoveGrippedActor(AActor * GrippedAc
 
 	FBPActorGripInformation * GripInfo = LocallyGrippedObjects.FindByKey(GrippedActorToMove);
 	if (!GripInfo)
-		GrippedObjects.FindByKey(GrippedActorToMove);
+		GripInfo = GrippedObjects.FindByKey(GrippedActorToMove);
 
 	if (GripInfo)
 	{
@@ -4312,7 +4327,7 @@ bool UGripMotionControllerComponent::TeleportMoveGrippedComponent(UPrimitiveComp
 
 	FBPActorGripInformation * GripInfo = LocallyGrippedObjects.FindByKey(ComponentToMove);
 	if (!GripInfo)
-		GrippedObjects.FindByKey(ComponentToMove);
+		GripInfo = GrippedObjects.FindByKey(ComponentToMove);
 
 	if (GripInfo)
 	{
@@ -4596,6 +4611,10 @@ bool UGripMotionControllerComponent::TeleportMoveGrip_Impl(FBPActorGripInformati
 			}
 		}
 	}
+
+	// TMP #TODO: Remove with 5.4 bug with velocity is fixed
+	// Reset our last world transform velocity as typically we don't want to accumulate teleport speeds into it.
+	Grip.LastVelWorldTrans = PrimComp->GetComponentTransform();
 
 	return true;
 }
@@ -5072,6 +5091,22 @@ FVector UGripMotionControllerComponent::GetComponentVelocity() const
 	return Super::GetComponentVelocity();
 }
 
+// TEMP: #TODO: Remove
+void UGripMotionControllerComponent::CalculateGripVelocity(FBPActorGripInformation& GripToFill, UPrimitiveComponent* ComponentToSample, float DeltaTime)
+{
+	if (!bHasAuthority && !IsServer())
+	{
+		return;
+	}
+
+	FTransform CurTrans = ComponentToSample->GetComponentTransform();
+
+	GripToFill.LinVel = (CurTrans.GetLocation() - GripToFill.LastVelWorldTrans.GetLocation()) / DeltaTime;
+	GripToFill.RotVel = FVector::RadiansToDegrees(((CurTrans.GetRotation().ToRotationVector() - GripToFill.LastVelWorldTrans.GetRotation().ToRotationVector()))) / DeltaTime;
+
+	GripToFill.LastVelWorldTrans = CurTrans;
+}
+
 void UGripMotionControllerComponent::HandleGripArray(TArray<FBPActorGripInformation> &GrippedObjectsArray, const FTransform & ParentTransform, float DeltaTime, bool bReplicatedArray)
 {
 	if (GrippedObjectsArray.Num())
@@ -5159,6 +5194,8 @@ void UGripMotionControllerComponent::HandleGripArray(TArray<FBPActorGripInformat
 					else if(bActorHasInterface)
 						IVRGripInterface::Execute_TickGrip(actor, this, *Grip, DeltaTime);
 
+					// TEMP 5.4 (or fixed)
+					CalculateGripVelocity(*Grip, root, DeltaTime);
 					continue;
 				}
 
@@ -5913,6 +5950,9 @@ void UGripMotionControllerComponent::HandleGripArray(TArray<FBPActorGripInformat
 					{}break;
 				}
 
+				// TEMP 5.4 (or fixed)
+				CalculateGripVelocity(*Grip, root, DeltaTime); // Technically for physical grips it would be post physics thre
+
 				// We only do this if specifically requested, it has a slight perf hit and isn't normally needed for non Custom Grip types
 				if (bAlwaysSendTickGrip)
 				{
@@ -5977,7 +6017,7 @@ void UGripMotionControllerComponent::CleanUpBadPhysicsHandles()
 	{
 		FBPActorGripInformation * GripInfo = LocallyGrippedObjects.FindByKey(PhysicsGrips[g].GripID);
 		if(!GripInfo)
-			GrippedObjects.FindByKey(PhysicsGrips[g].GripID);
+			GripInfo = GrippedObjects.FindByKey(PhysicsGrips[g].GripID);
 
 		if (!GripInfo)
 		{
@@ -6116,44 +6156,48 @@ bool UGripMotionControllerComponent::DestroyPhysicsHandle(const FBPActorGripInfo
 		return true;
 	}
 
-	UPrimitiveComponent *root = Grip.GetGrippedComponent();
-	AActor * pActor = Grip.GetGrippedActor();
-
-	if (!root && pActor)
-		root = Cast<UPrimitiveComponent>(pActor->GetRootComponent());
-
-	if (root)
+	if (IsValid(Grip.GrippedObject))
 	{
-		if (FBodyInstance * rBodyInstance = root->GetBodyInstance(Grip.GrippedBoneName))
+
+		UPrimitiveComponent* root = Grip.GetGrippedComponent();
+		AActor* pActor = Grip.GetGrippedActor();
+
+		if (!root && pActor)
+			root = Cast<UPrimitiveComponent>(pActor->GetRootComponent());
+
+		if (root)
 		{
-			// #TODO: Should this be done on drop instead?
-			// Remove event registration
-			if (!bSkipUnregistering)
+			if (FBodyInstance* rBodyInstance = root->GetBodyInstance(Grip.GrippedBoneName))
 			{
-				if (rBodyInstance->OnRecalculatedMassProperties().IsBoundToObject(this))
+				// #TODO: Should this be done on drop instead?
+				// Remove event registration
+				if (!bSkipUnregistering)
 				{
-					rBodyInstance->OnRecalculatedMassProperties().RemoveAll(this);
-				}
-			}
-
-			if (HandleInfo->bSetCOM)
-			{
-				// Reset center of mass to zero
-				// Get our original values
-				FVector vel = rBodyInstance->GetUnrealWorldVelocity();
-				FVector aVel = rBodyInstance->GetUnrealWorldAngularVelocityInRadians();
-				FVector originalCOM = rBodyInstance->GetCOMPosition();
-
-				if (rBodyInstance->IsValidBodyInstance() && rBodyInstance->BodySetup.IsValid())
-				{
-					rBodyInstance->UpdateMassProperties();
+					if (rBodyInstance->OnRecalculatedMassProperties().IsBoundToObject(this))
+					{
+						rBodyInstance->OnRecalculatedMassProperties().RemoveAll(this);
+					}
 				}
 
-				if (rBodyInstance->IsInstanceSimulatingPhysics())
+				if (HandleInfo->bSetCOM)
 				{
-					// Offset the linear velocity by the new COM position and set it
-					vel += FVector::CrossProduct(aVel, rBodyInstance->GetCOMPosition() - originalCOM);
-					rBodyInstance->SetLinearVelocity(vel, false);
+					// Reset center of mass to zero
+					// Get our original values
+					FVector vel = rBodyInstance->GetUnrealWorldVelocity();
+					FVector aVel = rBodyInstance->GetUnrealWorldAngularVelocityInRadians();
+					FVector originalCOM = rBodyInstance->GetCOMPosition();
+
+					if (rBodyInstance->IsValidBodyInstance() && rBodyInstance->BodySetup.IsValid())
+					{
+						rBodyInstance->UpdateMassProperties();
+					}
+
+					if (rBodyInstance->IsInstanceSimulatingPhysics())
+					{
+						// Offset the linear velocity by the new COM position and set it
+						vel += FVector::CrossProduct(aVel, rBodyInstance->GetCOMPosition() - originalCOM);
+						rBodyInstance->SetLinearVelocity(vel, false);
+					}
 				}
 			}
 		}
@@ -7174,18 +7218,25 @@ void UGripMotionControllerComponent::ApplyTrackingParameters(FVector& OriginalPo
 				if (GEngine->XRSystem->GetCurrentPose(IXRTrackingSystem::HMDDeviceId, curRot, curLoc))
 				{
 
-					if (IsValid(AttachChar) && AttachChar->VRReplicatedCamera)
+					/*if (IsValid(AttachChar) && AttachChar->VRReplicatedCamera)
 					{
 						AttachChar->VRReplicatedCamera->ApplyTrackingParameters(curLoc, true);
-					}
+					}*/
 
 					//curLoc.Z = 0;
 					LastLocationForLateUpdate = curLoc;
 
 					if (IsValid(AttachChar) && !AttachChar->bRetainRoomscale)
 					{
-						FRotator StoredCameraRotOffset = UVRExpansionFunctionLibrary::GetHMDPureYaw_I(curRot.Rotator());
-						LastLocationForLateUpdate += StoredCameraRotOffset.RotateVector(FVector(AttachChar->VRRootReference->VRCapsuleOffset.X, AttachChar->VRRootReference->VRCapsuleOffset.Y, 0.0f));
+						if (AttachChar->VRMovementReference && AttachChar->VRMovementReference->GetReplicatedMovementMode() == EVRConjoinedMovementModes::C_VRMOVE_Seated)
+						{
+
+						}
+						else
+						{
+							FRotator StoredCameraRotOffset = UVRExpansionFunctionLibrary::GetHMDPureYaw_I(curRot.Rotator());
+							LastLocationForLateUpdate += StoredCameraRotOffset.RotateVector(FVector(AttachChar->VRRootReference->VRCapsuleOffset.X, AttachChar->VRRootReference->VRCapsuleOffset.Y, 0.0f));
+						}
 					}
 				}
 			}
@@ -7194,12 +7245,19 @@ void UGripMotionControllerComponent::ApplyTrackingParameters(FVector& OriginalPo
 				if (IsValid(AttachChar) && AttachChar->VRReplicatedCamera)
 				{
 					// Sample camera location instead
-					LastLocationForLateUpdate = AttachChar->VRReplicatedCamera->GetRelativeLocation();
+					LastLocationForLateUpdate = AttachChar->VRReplicatedCamera->ReplicatedCameraTransform.Position; //GetRelativeLocation();
 
 					if (!AttachChar->bRetainRoomscale && IsLocallyControlled())
 					{
-						FRotator StoredCameraRotOffset = UVRExpansionFunctionLibrary::GetHMDPureYaw_I(AttachChar->VRReplicatedCamera->GetRelativeRotation());
-						LastLocationForLateUpdate += StoredCameraRotOffset.RotateVector(FVector(AttachChar->VRRootReference->VRCapsuleOffset.X, AttachChar->VRRootReference->VRCapsuleOffset.Y, 0.0f));
+						if (AttachChar->VRMovementReference && AttachChar->VRMovementReference->GetReplicatedMovementMode() == EVRConjoinedMovementModes::C_VRMOVE_Seated)
+						{
+
+						}
+						else
+						{
+							FRotator StoredCameraRotOffset = UVRExpansionFunctionLibrary::GetHMDPureYaw_I(AttachChar->VRReplicatedCamera->GetRelativeRotation());
+							LastLocationForLateUpdate += StoredCameraRotOffset.RotateVector(FVector(AttachChar->VRRootReference->VRCapsuleOffset.X, AttachChar->VRRootReference->VRCapsuleOffset.Y, 0.0f));
+						}
 					}
 				}
 			}
@@ -7308,6 +7366,10 @@ bool UGripMotionControllerComponent::GripPollControllerState_GameThread(FVector&
 
 				if (bIsInGameThread)
 				{
+					EControllerHand HandType;
+					GetHandType(HandType);
+					FName GripSource = (HandType == EControllerHand::Left) ? FName("LeftGrip") : FName("RightGrip");
+
 					CurrentTrackingStatus = MotionController->GetControllerTrackingStatus(PlayerIndex, MotionSource);
 					if (!bIgnoreTrackingStatus && CurrentTrackingStatus == ETrackingStatus::NotTracked)
 						continue;
@@ -7376,7 +7438,11 @@ bool UGripMotionControllerComponent::GripPollControllerState_RenderThread(FVecto
 
 	if (PolledMotionController_RenderThread)
 	{
-		CurrentTrackingStatus = PolledMotionController_RenderThread->GetControllerTrackingStatus(PlayerIndex, MotionSource);
+		EControllerHand HandType;
+		GetHandType(HandType);
+		FName GripSource = (HandType == EControllerHand::Left) ? FName("LeftGrip") : FName("RightGrip");
+
+		CurrentTrackingStatus = PolledMotionController_RenderThread->GetControllerTrackingStatus(PlayerIndex, GripSource);
 		if (PolledMotionController_RenderThread->GetControllerOrientationAndPosition(PlayerIndex, MotionSource, Orientation, Position, WorldToMetersScale))
 		{
 			if (HasTrackingParameters())
@@ -8286,12 +8352,12 @@ void UGripMotionControllerComponent::GetHandType(EControllerHand& Hand)
 	{
 		// Check if the palm motion source extension is being used
 		// I assume eventually epic will handle this case
-		if (MotionSource.Compare(FName(TEXT("RightPalm"))) == 0)
+		if (MotionSource.Compare(FName(TEXT("RightPalm"))) == 0 || MotionSource.Compare(FName(TEXT("RightWrist"))) == 0)
 		{
 			Hand = EControllerHand::Right;
 		}
 		// Could skip this and default to left now but would rather check
-		else if (MotionSource.Compare(FName(TEXT("LeftPalm"))) == 0)
+		else if (MotionSource.Compare(FName(TEXT("LeftPalm"))) == 0 || MotionSource.Compare(FName(TEXT("LeftWrist"))) == 0)
 		{
 			Hand = EControllerHand::Left;
 		}
